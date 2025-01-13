@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 require "parallel_tests/test/runner"
+require "parallel_tests/rspec/parent_process"
 
 module ParallelTests
   module RSpec
@@ -8,7 +9,12 @@ module ParallelTests
       class << self
         def run_tests(test_files, process_number, num_processes, options)
           cmd = [*executable, *options[:test_options], *color, *spec_opts, *test_files]
-          execute_command(cmd, process_number, num_processes, options)
+
+          if options[:fork]
+            ParentProcess.fork_and_run(cmd, process_number, num_processes, options)
+          else
+            execute_command(cmd, process_number, num_processes, options)
+          end
         end
 
         def determine_executable

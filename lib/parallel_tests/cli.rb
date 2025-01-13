@@ -57,12 +57,14 @@ module ParallelTests
       Tempfile.open 'parallel_tests-lock' do |lock|
         ParallelTests.with_pid_file do
           simulate_output_for_ci options[:serialize_stdout] do
-            Parallel.map_with_index(items, in_threads: num_processes) do |item, index|
+            results = Parallel.map_with_index(items, in_threads: num_processes) do |item, index|
               result = yield(item, index)
-              reprint_output(result, lock.path) if options[:serialize_stdout]
+              result[:process_number] = index + 1
               ParallelTests.stop_all_processes if options[:fail_fast] && result[:exit_status] != 0
               result
             end
+            reprint_output(results, lock.path) if options[:serialize_stdout]
+            results
           end
         end
       end
@@ -72,6 +74,17 @@ module ParallelTests
       test_results = nil
 
       run_tests_proc = -> do
+        # Boot Rails before any parallelization if using RSpec and forking
+        if @runner.module_eval { to_s } == "ParallelTests::RSpec::Runner" && options[:fork]
+          require 'parallel_tests/rspec/parent_process'
+          puts "#{Time.now} Boot started"
+          ParallelTests::RSpec::ParentProcess.boot
+          puts "#{Time.now} Boot finished"
+
+          # Always serialize stdout for RSpec to avoid interleaved output
+          options[:serialize_stdout] = true
+        end
+
         groups = @runner.tests_in_groups(options[:files], num_processes, options)
         groups.reject!(&:empty?)
 
@@ -123,15 +136,28 @@ module ParallelTests
         end
         result
       else
-        @runner.run_tests(group, process_number, num_processes, options)
+        puts "#{Time.now} #{process_number} forking started"
+        result = @runner.run_tests(group, process_number, num_processes, options)
+        puts "#{Time.now} #{process_number} forking finished"
+        result
       end
     end
 
-    def reprint_output(result, lockfile)
+    def reprint_output(results, lockfile)
+      return unless results.is_a?(Array)
+
+      # Sort results to show failures first
+      sorted_results = results.sort_by do |result|
+        # Failed tests (non-zero exit status) come first
+        [result[:exit_status] == 0 ? 1 : 0, result[:exit_status]]
+      end
+
       lock(lockfile) do
-        $stdout.puts
-        $stdout.puts result[:stdout]
-        $stdout.flush
+        sorted_results.each do |result|
+          $stdout.puts
+          $stdout.puts result[:stdout]
+          $stdout.flush
+        end
       end
     end
 
@@ -315,6 +341,7 @@ module ParallelTests
           puts opts
           exit 0
         end
+        opts.on("--fork", "Boot rails in a parent process and then fork each rspec process") { options[:fork] = true }
       end.parse!(argv)
 
       raise "Both options are mutually exclusive: verbose & quiet" if options[:verbose] && options[:quiet]

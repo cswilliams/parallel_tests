@@ -1,10 +1,13 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
+require 'time'
+
 # enable local usage from cloned repo
 root = File.expand_path('..', __dir__)
 $LOAD_PATH << "#{root}/lib" if File.exist?("#{root}/Gemfile")
 
 require "parallel_tests"
-
+puts "#{Time.now}: Starting up"
 ParallelTests::CLI.new.run(["--type", "rspec"] + ARGV)
+puts "#{Time.now}: Finished"
